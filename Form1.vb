@@ -5,8 +5,9 @@ Imports System.Data.SqlClient
 Imports System.Reflection
 
 Friend Class Form1
+    'Code below imports libraries for coding use
+    '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
     Inherits System.Windows.Forms.Form
-    'Declaration of Private Subroutine
     Private Declare Sub about Lib "tsclib.dll" ()
     Private Declare Sub openport Lib "tsclib.dll" (ByVal PrinterName As String)
     Private Declare Sub closeport Lib "tsclib.dll" ()
@@ -35,6 +36,10 @@ Friend Class Form1
     Private myPrinterStatus As String
     Private WithEvents timer As New System.Windows.Forms.Timer
 
+    'Windows Form Action Handlers
+    '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+
+    '[Print Master List] Button Handler
     Private Sub Command1_Click(ByVal eventSender As System.Object, ByVal eventArgs As System.EventArgs) Handles printButton.Click
 
         Dim B1 As String = "20080101"
@@ -43,20 +48,21 @@ Friend Class Form1
         Dim result_unicode() As Byte = System.Text.Encoding.GetEncoding(1200).GetBytes("TEST UNICODE")
         Dim result_utf8() As Byte = System.Text.Encoding.UTF8.GetBytes("TEXT 40,620,""ARIAL.TTF"",0,12,12,""utf8 test Wörter auf Deutsch""")
 
+        'DB Variables
         Dim assetCode, assetId, brand, category, uom, dateAcquired, location, assignedTo, serialNo As String
         Dim masterId, qty, propertyHistoryId, cntr As Integer
 
-        'DB DATA VARIABLE DECLARATION
-
+        'Additional Commands for TSPL printers. Please Refer to the Documentation for clarfication. You can delete this if you want.
+        '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
 
         'Call about()
         'status = usbportqueryprinter() '0 = idle, 1 = head open, 16 = pause, following <ESC>!? command of TSPL manual
-        Call openport("TSC TTP-244CE")
+
         'Call sendcommand("SIZE 2.5, 1.5")
         'Call sendcommand("SPEED 4")
         'Call sendcommand("DENSITY 12")
         'Call sendcommand("DIRECTION 1")
-        ''Call sendcommand("SET TEAR ON")
+        'Call sendcommand("SET TEAR ON")
         'Call sendcommand("CODEPAGE UTF-8")
         ''Call downloadpcx(Application.StartupPath & "\UL.PCX", "UL.PCX")
         ''Call downloadpcx(Application.StartupPath & "\MY_SAMPLE.PCX", "MY_SAMPLE.PCX")
@@ -78,10 +84,19 @@ Friend Class Form1
         'Call barcode("40", "40", "128", "80", "1", "0", "2", "2", "TESTPRINT")
         'Call printlabel("1", "1")
 
+        '-----------------------------------------------------------------------------
+
+        'Establish connection with the printer. Change this according to the printer we want to connect with
+        Call openport("TSC TTP-244CE")
+
+        'Prepare connection command
         commandUpdate = connection.CreateCommand
         command = connection.CreateCommand
+
+        'SQL command to select all items pending for printing
         command.CommandText = "SELECT * From AS_MasterList WHERE forPrinting = 'true' AND Removed_Status IS NULL"
 
+        'Create another command to select items from the table with its details
         commandPropertyHistory = connection.CreateCommand
         commandPropertyHistory.CommandText = "WITH CTE (Asset_Code, DateAcquired, Category, Brand, Uom, Qty, forPrinting, PropertyHistoryId, Location, MasterId, Name, SerialNo, rn)
                                                 AS(
@@ -96,6 +111,10 @@ Friend Class Form1
                                               ORDER BY PropertyHistoryId DESC
                                               "
 
+        'Execute command. 
+        'NOTE: I think it's unnecessary to have the "reader" command, since we're already fetching the lists through
+        'readerPropertyHistory. I'm too lazy to edit it out, so feel free to do so
+
         reader = command.ExecuteReader()
         readerPropertyHistory = commandPropertyHistory.ExecuteReader()
 
@@ -105,8 +124,10 @@ Friend Class Form1
         Else
             Do While readerPropertyHistory.Read()
 
+                'Assign fetched details to these variables. NOTE: GetString(n), where "n" stands for the index of the column of the
+                'result set of the sql query: SELECT AS_MasterList.Asset_Code, AS_MasterList.DateAcquired, AS_MasterList.Category... 
+                'as seen on line 103. EX: asset code is index 0, date acquired is index 1 etc. accordingly
                 assetCode = readerPropertyHistory.GetString(0)
-                'dateAcquired = readerPropertyHistory.GetDateTime(1).ToShortDateString()
                 dateAcquired = If(IsDBNull(readerPropertyHistory(1)), "N/A", readerPropertyHistory.GetDateTime(1).ToShortDateString())
                 category = If(IsDBNull(readerPropertyHistory(2)), "N/A", readerPropertyHistory.GetString(2))
                 brand = If(IsDBNull(readerPropertyHistory(3)), "N/A", readerPropertyHistory.GetString(3))
@@ -117,15 +138,26 @@ Friend Class Form1
                 assignedTo = If(IsDBNull(readerPropertyHistory(10)), "N/A", readerPropertyHistory.GetString(10))
                 serialNo = If(IsDBNull(readerPropertyHistory(11)), "N/A", readerPropertyHistory.GetString(11))
 
+                'Update the printing status of the item in the table
                 commandUpdate.CommandText = "UPDATE AS_MasterList SET forPrinting = 'false' WHERE Asset_Code = '" & assetCode & "'"
                 commandUpdate.ExecuteNonQuery()
 
+                'This line is IMPORTANT. Failure to clear the buffer will just append the new item to be printed to the item previously
+                'printed. 
+                'EX(No clear buffer): PRINT LAPTOP001 -> [NO CLEAR BUFFER] -> PRINT LAPTOP001 LAPTOP002...
+                'EX(w/ clear buffer): PRINT LAPTOP001 -> [CLEAR BUFFER] -> PRINT LAPTOP002 -> [CLEAR BUFFER] -> PRINT LAPTOP003
                 Call clearbuffer()
 
+                'Special Case for laptop. Since it was discussed previously with asset that laptops' labels are printed twice.
+                'One for the actual unit, and one for the charger
                 If category = "Laptop" Then
+
+                    'Basically, print from start to quantity stated in the table
                     For cntr = 1 To qty
                         Call clearbuffer()
 
+                        'Actual command for printing. This is where we format the output for the label.
+                        'Change this as desired. Please refer to the documentation for commands and its syntax + uses
                         Call windowsfont(30, 10, 38, 0, 2, 0, "Arial", "ENCHANTED KINGDOM INC.")
                         Call printerfont("20", "65", "2", "0", "1", "1", "Assignee: ")
                         Call printerfont("20", "85", "2", "0", "1", "1", "" + assignedTo)
@@ -177,33 +209,7 @@ Friend Class Form1
 
             Loop
 
-            'Do While reader.Read()
-            '    MsgBox(reader.GetString(5))
-            '    resultID = reader.GetInt32(0)
-
-            '    assetCode = reader.GetString(1)
-            '    assetId = reader.GetString(5)
-            '    brand = reader.GetString(11)
-            '    category = reader.GetString(9)
-            '    uom = reader.GetString(12)
-
-            '    'commandUpdate.CommandText = "UPDATE AS_MasterList SET forPrinting = 'false' WHERE id = '" & resultID & "'"
-            '    'commandUpdate.ExecuteNonQuery()
-
-            '    Call clearbuffer()
-
-            '    Call printerfont("20", "35", "3", "0", "1", "1", "EKI ASSET INVENTORY TAG")
-            '    Call printerfont("20", "65", "3", "0", "1", "1", "Asset Code: " + assetCode)
-            '    Call printerfont("20", "185", "3", "0", "1", "1", "Date Acquired: " + uom)
-            '    Call printerfont("20", "125", "3", "0", "1", "1", "Brand: " + brand)
-            '    Call printerfont("20", "155", "3", "0", "1", "1", "Category: " + category)
-            '    Call printerfont("20", "185", "3", "0", "1", "1", "uom: " + uom)
-            '    Call sendcommand("QRCODE 325, 150, L, 7, M, 0, """ + assetCode + """")
-
-            '    printlabel(1, 1)
-
-            'Loop
-
+            'IMPORTANT! always close the connection
             reader.Close()
             readerPropertyHistory.Close()
             connection.Close()
@@ -225,6 +231,8 @@ Friend Class Form1
 
 
     End Sub
+
+    'Printer Status
     Private Enum PrinterStatus As UShort
         PrinterOther = 1
         PrinterUnknown = 2
@@ -233,6 +241,7 @@ Friend Class Form1
         PrinterWarmingUp = 5
     End Enum
 
+    'Main Form
     Private Sub Form1_Load(sender As Object, e As EventArgs) Handles Me.Load
 
         Me.CenterToScreen()
@@ -241,11 +250,18 @@ Friend Class Form1
         versionNumber = Assembly.GetExecutingAssembly().GetName().Version
         buildVersion.Text = versionNumber.ToString
 
+        'Code below is for auto refreshing the form. Problem is, this works only for a few minutes, then it hangs.
+        'Probably because of memory allocation problems due to the timer. Feel free to edit and use
+        '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+
         'timer.Interval = 60000 / 4
 
         'AddHandler timer.Tick, (AddressOf elapsedEvent)
         'timer.Enabled = True
         'timer.Start()
+
+        '------------------------------------------------------------------------------------------------------
+
 
         Try
 
@@ -292,18 +308,6 @@ Friend Class Form1
             Next
 
             ''https://docs.microsoft.com/en-us/windows/desktop/CIMWin32Prov/win32-printer
-            'sb.AppendLine()
-            'sb.AppendLine("Properties")
-            'For Each printObj As ManagementObject In searcher.Get()
-            '    sb.AppendFormat("Name: {0}", printObj("Name"))
-            '    sb.AppendLine()
-            '    For Each prop As PropertyData In printObj.Properties
-            '        sb.AppendFormat("printObj({0}): {1}", prop.Name, prop.Value)
-            '        sb.AppendLine()
-            '    Next
-            '    sb.AppendLine()
-            'Next
-            'RichTextBox1.Text = sb.ToString
 
 
         Catch err As ManagementException
@@ -312,6 +316,7 @@ Friend Class Form1
 
         '----------------------------------END PRINTER STATUS----------------------------------------
 
+        'Code below handles the display for the connection status of both the printer and the database
         If (connection.State = ConnectionState.Open) And (myPrinterStatus = "CONNECTED") Then
             isConnected.Text = "CONNECTED"
             isConnected.Enabled = False
@@ -362,6 +367,7 @@ Friend Class Form1
         'connection.Close()
     End Sub
 
+    'Supplementary code for auto-refresh feature.
     Private Sub elapsedEvent()
         'timer.Stop()
         Application.Restart()
@@ -380,6 +386,9 @@ Friend Class Form1
         reloadForm()
     End Sub
 
+    'The code below pertains to the "priority" printing feature of the asset management system. This prints the items
+    'tagged with "priority".
+    '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
     Private Sub selective_print_Click(sender As Object, e As EventArgs) Handles selective_print.Click
         Dim B1 As String = "20080101"
         Dim WT1 As String = "TSC Printers"
@@ -450,7 +459,7 @@ Friend Class Form1
             Do While readerPropertyHistory.Read()
 
                 assetCode = readerPropertyHistory.GetString(0)
-                'dateAcquired = readerPropertyHistory.GetDateTime(1).ToShortDateString()
+
                 dateAcquired = If(IsDBNull(readerPropertyHistory(1)), "N/A", readerPropertyHistory.GetDateTime(1).ToShortDateString())
                 category = If(IsDBNull(readerPropertyHistory(2)), "N/A", readerPropertyHistory.GetString(2))
                 brand = If(IsDBNull(readerPropertyHistory(3)), "N/A", readerPropertyHistory.GetString(3))
@@ -511,33 +520,6 @@ Friend Class Form1
 
             Loop
 
-            'Do While reader.Read()
-            '    MsgBox(reader.GetString(5))
-            '    resultID = reader.GetInt32(0)
-
-            '    assetCode = reader.GetString(1)
-            '    assetId = reader.GetString(5)
-            '    brand = reader.GetString(11)
-            '    category = reader.GetString(9)
-            '    uom = reader.GetString(12)
-
-            '    'commandUpdate.CommandText = "UPDATE AS_MasterList SET forPrinting = 'false' WHERE id = '" & resultID & "'"
-            '    'commandUpdate.ExecuteNonQuery()
-
-            '    Call clearbuffer()
-
-            '    Call printerfont("20", "35", "3", "0", "1", "1", "EKI ASSET INVENTORY TAG")
-            '    Call printerfont("20", "65", "3", "0", "1", "1", "Asset Code: " + assetCode)
-            '    Call printerfont("20", "185", "3", "0", "1", "1", "Date Acquired: " + uom)
-            '    Call printerfont("20", "125", "3", "0", "1", "1", "Brand: " + brand)
-            '    Call printerfont("20", "155", "3", "0", "1", "1", "Category: " + category)
-            '    Call printerfont("20", "185", "3", "0", "1", "1", "uom: " + uom)
-            '    Call sendcommand("QRCODE 325, 150, L, 7, M, 0, """ + assetCode + """")
-
-            '    printlabel(1, 1)
-
-            'Loop
-
             reader.Close()
             readerPropertyHistory.Close()
             connection.Close()
@@ -547,6 +529,7 @@ Friend Class Form1
         End If
     End Sub
 
+    'This code snippet just prints a test paper.
     Private Sub initButton_Click(sender As Object, e As EventArgs) Handles initButton.Click
         Dim rerun As Integer
 
@@ -571,6 +554,9 @@ Friend Class Form1
 
     End Sub
 
+    'This code prints inventoriables. Basically the concept is the same as the printing snippets from above. 
+    'So base the documentation from those.
+    '↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
     Private Sub printInventoriable_Click(sender As Object, e As EventArgs) Handles printInventoriable.Click
         Dim B1 As String = "20080101"
         Dim WT1 As String = "TSC Printers"
@@ -588,7 +574,6 @@ Friend Class Form1
         commandUpdate = connection.CreateCommand
         command = connection.CreateCommand
         commandBase = connection.CreateCommand
-        'command.CommandText = "SELECT * From AS_Inventoriables WHERE To_Print = 'TRUE' AND Not Removed_Status = 'True' OR To_Print = 'TRUE' AND Removed_Status IS NULL"
         command.CommandText = "WITH CTE (Asset_Code, DateAcquired, Category, Brand, Uom, Qty, ToPrint, PrintFrom, PrintTo, LastPrint, Location, Name, HistoryId, rn)
                                                 AS(
                                                     SELECT AS_Inventoriables.Asset_Code, AS_Inventoriables.Date_Acquired, AS_Inventoriables.Category, AS_Inventoriables.Brand, AS_Inventoriables.Uom, AS_Inventoriables.Qty, AS_Inventoriables.To_Print, AS_Inventoriables.Print_From, AS_Inventoriables.Print_To, AS_Inventoriables.Last_Print, AS_InventoriablesHistory.Location, AS_InventoriablesHistory.Assignee, AS_InventoriablesHistory.Id,
@@ -604,12 +589,6 @@ Friend Class Form1
 
         Do While reader.Read()
 
-            'assetCode = reader.GetString(1)
-            'dateAcquired = If(IsDBNull(reader(17)), "N/A", reader.GetDateTime(17).ToShortDateString())
-            'category = If(IsDBNull(reader(6)), "N/A", reader.GetString(6))
-            'brand = If(IsDBNull(reader(7)), "N/A", reader.GetString(7))
-            'uom = If(IsDBNull(reader(10)), "N/A", reader.GetString(10))
-            'qty = If(IsDBNull(reader(8)), "N/A", reader.GetInt32(8))
             assetCode = reader.GetString(0)
             dateAcquired = If(IsDBNull(reader(1)), "N/A", reader.GetDateTime(1).ToShortDateString())
             category = If(IsDBNull(reader(2)), "N/A", reader.GetString(2))
@@ -624,18 +603,9 @@ Friend Class Form1
             baseReader.Read()
 
             For cntr = baseReader.GetInt32(0) To baseReader.GetInt32(1)
-                'status = usbportqueryprinter()
-
-                'If (status <> 0 And (status <> 20 Or status <> 10)) Then
-                '    commandUpdate.CommandText = "UPDATE AS_Inventoriables SET Interrupted = 'true', Last_Print = '" & cntr - 1 & "' WHERE Asset_Code = '" & assetCode & "'"
-                '    commandUpdate.ExecuteNonQuery()
-
-                '    Exit Do
-                'End If
 
                 Call clearbuffer()
 
-                'Call printerfont("20", "35", "3", "0", "1", "1", "ENCHANTED KINGDOM INC.")
                 Call windowsfont(30, 35, 38, 0, 2, 0, "Arial", "ENCHANTED KINGDOM INC.")
                 Call printerfont("20", "85", "2", "0", "1", "1", "Date Acquired: " + dateAcquired)
                 Call printerfont("20", "115", "2", "0", "1", "1", "Asset Code: " + assetCode)
@@ -662,11 +632,14 @@ Friend Class Form1
 End Class
 
 Module myFunctions
+
+    'This snippet fetches the amount of pending items to be printed. This is reflected in the windows form UI.
     Public Function GetPending(command, connection, reader) As String
         Dim cnt As Integer
 
         cnt = 0
         command = connection.CreateCommand
+        'Select all items waiting to be printed, as long as they are not removed nor printed already.
         command.CommandText = "SELECT id FROM AS_MasterList WHERE forPrinting = 'TRUE' AND Not Removed_Status = 'TRUE' OR forPrinting = 'TRUE' AND Removed_Status IS NULL"
         reader = command.ExecuteReader()
 
@@ -679,6 +652,7 @@ Module myFunctions
 
     End Function
 
+    'Same as the code above, but for inventoriables.
     Public Function GetPendingInventoriable(command, connection, reader) As String
         Dim cnt As Integer
 
@@ -696,6 +670,7 @@ Module myFunctions
 
     End Function
 
+    'Same as the first two above, but for items that have priority.
     Public Function GetPendingPriority(command, connection, reader) As String
         Dim cnt As Integer
 
